@@ -1,0 +1,36 @@
+name: QWLeague Validation
+
+on:
+  pull_request:
+    branches: [master, integration/antilag1-production]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qwleague-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test protected-path policy
+        run: python3 tools/test_qwleague_policy.py
+      - name: Build and verify production Antilag integration
+        if: github.base_ref == 'integration/antilag1-production' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f qcsrc/pred.qc
+          test -f qcsrc/projectiles.qc
+          test -f qcsrc/weapon_table.qc
+          test ! -e qcsrc/weaponpred.qc
+          grep -q 'WEAPONINFO_GENERATION_SHIFT' include/progs.h
+          grep -q 'WeaponPrediction_ClientReady' src/client.c
+          grep -q 'cvar("sv_antilag") != 1' src/antilag.c
+          cmake -S . -B build
+          cmake --build build --parallel
+          nm -a build/qwprogs.so > symbols.txt
+          for symbol in antilag_lagmove_all_hitscan antilag_lagmove_all_proj SendEntity_Projectile mm_player_token; do
+            grep -E "[[:space:]]$symbol$" symbols.txt
+          done
