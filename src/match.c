@@ -765,12 +765,16 @@ void EndMatch(float skip_log)
 static int mm_wait_left = 0;
 static int mm_warmup_left = 0;
 
+static void mm_lineup_reset(void);
+
 // Called from world.c on every matchmade map load: a NEW map (including each map
 // of a series) gets fresh clocks, a leave/rejoin within the same map does not.
 void mm_prematch_clocks_reset(void)
 {
 	mm_wait_left = (int) bound(30, cvar("k_match_join_deadline"), 600);
 	mm_warmup_left = (int) bound(10, cvar("k_mm_warmup"), 600);
+	// The previous map's lineup must not decide who is "missing" from this one.
+	mm_lineup_reset();
 }
 
 // Forfeit helpers (defined further below) used by the series-aware no-show
@@ -2506,19 +2510,97 @@ void mm_extend_forfeit_deadline(int ms)
 	}
 }
 
-// Returns the count of `k_allowed_tokens` entries that have no matching
-// connected player. Fills `out[i]` with up to MAX missing tokens.
-static int mm_missing_tokens(char out[][64], int max_out)
+static void mm_token_team(const char *want, char *out, int out_sz);
+
+// ── Per-map LINEUP (qwleague) ──────────────────────────────────────────────
+// k_allowed_tokens is the CONNECT gate, NOT the roster in play. For a queue
+// match the two are the same list, but an arranged session (clan tournament
+// fixture or prac, docs/adr/0006) is spawned with each clan's WHOLE roster —
+// fixture 161 on 2026-09-16 carried 15 allowed tokens for an 8-player 4on4 —
+// because any rostered member may play or substitute. Judging presence against
+// that list counts every benched clan member as a missing player, so a
+// technical timeout in a tournament match can never resolve to "everyone's
+// back": the dropped player rejoined, all 8 were on the server, and KTX still
+// demanded a "proceed" vote and was heading for a no-Elo abort.
+//
+// So snapshot the players actually in the game when the map goes live and judge
+// presence against THAT, per side and by HEADCOUNT: a side is short only while
+// it has fewer players on the server than it started the map with. Counting
+// heads rather than matching token identity is what makes a substitution work —
+// a bench player who takes the dropped player's slot fills the deficit.
+#define MM_MAX_LINEUP 16
+static char mm_lineup[MM_MAX_LINEUP][64];
+static int mm_lineup_n = 0;
+
+static void mm_lineup_reset(void)
 {
-	const char *list = cvar_string("k_allowed_tokens");
-	const char *p = list;
+	mm_lineup_n = 0;
+}
+
+// Called from StartMatch: this map's starting lineup.
+static void mm_lineup_snapshot(void)
+{
+	gedict_t *p;
+
+	mm_lineup_n = 0;
+
+	if (!is_matchmade_server())
+	{
+		return;
+	}
+
+	for (p = world; (p = find_plr(p)) && mm_lineup_n < MM_MAX_LINEUP;)
+	{
+		const char *tok = mm_player_token(p);
+
+		if (p->isBot || !tok[0])
+		{
+			continue;  // bots carry no match token, and never had a slot to miss
+		}
+		strlcpy(mm_lineup[mm_lineup_n++], tok, 64);
+	}
+}
+
+// Is any connected player holding this token right now?
+static qbool mm_token_connected(const char *tok)
+{
+	gedict_t *p;
+
+	if (!tok[0])
+	{
+		return false;
+	}
+	for (p = world; (p = find_plr(p));)
+	{
+		if (streq(mm_player_token(p), tok))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// The roster to judge presence against: this map's lineup once the map is
+// live, else (pre-match) the allowed list, which is all we have to name people
+// by before anyone has taken a slot.
+static int mm_roster_tokens(char out[][64], int max_out)
+{
+	const char *p;
 	char tok[64];
 	size_t i;
-	int missing = 0;
-	gedict_t *plr;
-	qbool present;
+	int n = 0;
 
-	while (*p && missing < max_out)
+	if (mm_lineup_n > 0)
+	{
+		for (n = 0; n < mm_lineup_n && n < max_out; n++)
+		{
+			strlcpy(out[n], mm_lineup[n], 64);
+		}
+		return n;
+	}
+
+	p = cvar_string("k_allowed_tokens");
+	while (*p && n < max_out)
 	{
 		while (*p == ' ' || *p == '\t' || *p == ',')
 		{
@@ -2534,21 +2616,121 @@ static int mm_missing_tokens(char out[][64], int max_out)
 		{
 			continue;
 		}
-		present = false;
-		for (plr = world; (plr = find_plr(plr));)
+		strlcpy(out[n++], tok, 64);
+	}
+	return n;
+}
+
+// Which side a token plays for, "" when there is no team map at all. `teamed`
+// off means one single bucket: every token belongs to the same (nameless) side.
+static qbool mm_side_of(const char *tok, const char *side, qbool teamed)
+{
+	char team[32];
+
+	if (!teamed)
+	{
+		return true;
+	}
+	mm_token_team(tok, team, sizeof(team));
+	return streq(team, side);
+}
+
+// Returns how many SLOTS are currently unfilled, i.e. for each side, how far
+// its headcount has fallen below what it started the map with (before the match
+// starts, below the mode's per-side size). Fills `out[i]` with a roster token
+// for each unfilled slot — someone on that side who is genuinely not on the
+// server — so callers can name and blame the absent player. The first leaver is
+// listed first, so forfeit attribution names whoever actually walked out rather
+// than an arbitrary team-mate.
+static int mm_missing_tokens(char out[][64], int max_out)
+{
+	char roster[MM_MAX_LINEUP][64];
+	int rn = mm_roster_tokens(roster, MM_MAX_LINEUP);
+	qbool teamed = (cvar_string("k_token_teams")[0] != 0);
+	const char *sides[2];
+	int nsides = (teamed ? 2 : 1);
+	int missing = 0;
+	int si, i;
+
+	sides[0] = (teamed ? mm_series_team1() : "");
+	sides[1] = (teamed ? mm_series_team2() : "");
+
+	for (si = 0; si < nsides && missing < max_out; si++)
+	{
+		int expected = 0;
+		int present = 0;
+		int deficit;
+		qbool leaver_listed = false;
+		gedict_t *p;
+
+		if (mm_lineup_n > 0)
 		{
-			if (streq(mm_player_token(plr), tok))
+			for (i = 0; i < rn; i++)
 			{
-				present = true;
-				break;
+				if (mm_side_of(roster[i], sides[si], teamed))
+				{
+					expected++;
+				}
 			}
 		}
-		if (!present)
+		else
 		{
-			strlcpy(out[missing], tok, 64);
-			missing++;
+			// No lineup yet (waiting / warmup): the mode's own size is what this
+			// side owes.
+			int need = (int) cvar("k_mm_players");
+
+			if (need < 2)
+			{
+				need = 2;
+			}
+			expected = (teamed ? need / 2 : need);
+		}
+
+		// Heads on the server for this side. ANY allowed token counts, not just
+		// the ones in the lineup, so a rostered substitute fills the slot of the
+		// player they came on for.
+		for (p = world; (p = find_plr(p));)
+		{
+			if (p->isBot)
+			{
+				continue;
+			}
+			if (mm_side_of(mm_player_token(p), sides[si], teamed))
+			{
+				present++;
+			}
+		}
+
+		deficit = expected - present;
+
+		if ((deficit > 0) && mm_first_leaver[0] && missing < max_out
+				&& mm_side_of(mm_first_leaver, sides[si], teamed)
+				&& !mm_token_connected(mm_first_leaver))
+		{
+			strlcpy(out[missing++], mm_first_leaver, 64);
+			leaver_listed = true;
+			deficit--;
+		}
+
+		for (i = 0; (i < rn) && (deficit > 0) && (missing < max_out); i++)
+		{
+			if (leaver_listed && streq(roster[i], mm_first_leaver))
+			{
+				continue;
+			}
+			if (!mm_side_of(roster[i], sides[si], teamed))
+			{
+				continue;
+			}
+			if (mm_token_connected(roster[i]))
+			{
+				continue;
+			}
+			strlcpy(out[missing++], roster[i], 64);
+			deficit--;
 		}
 	}
+
 	return missing;
 }
 
@@ -3497,6 +3679,9 @@ void StartMatch(void)
 		mm_forfeit_start_ms = 0;
 		mm_drop_correlated = false;
 		mm_proceed_reset();
+		// Who is actually playing this map — the roster every presence check is
+		// judged against from here on (see mm_missing_tokens).
+		mm_lineup_snapshot();
 	}
 
 	k_nochange = 0;

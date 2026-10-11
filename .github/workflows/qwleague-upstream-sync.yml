@@ -1,0 +1,226 @@
+name: QWLeague Upstream Sync
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Open an integration PR even when upstream is already merged'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: qwleague-upstream-sync
+  cancel-in-progress: false
+
+env:
+  # This is the validated production integration, not the historical port branch.
+  FORK_BRANCH: integration/antilag1-production
+  UPSTREAM_REPOSITORY: niQQe/ktx
+  UPSTREAM_BRANCH: qwleague
+
+jobs:
+  prepare-integration-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout the Antilag fork
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FORK_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch QWLeague upstream
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add qwleague "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --no-tags qwleague "+refs/heads/${UPSTREAM_BRANCH}:refs/remotes/qwleague/${UPSTREAM_BRANCH}"
+          upstream_sha="$(git rev-parse "qwleague/${UPSTREAM_BRANCH}")"
+          echo "sha=${upstream_sha}" >> "$GITHUB_OUTPUT"
+
+          baseline_file=.github/qwleague-upstream-baseline
+          test -s "$baseline_file"
+          baseline_sha="$(tr -d '[:space:]' < "$baseline_file")"
+          git cat-file -e "${baseline_sha}^{commit}"
+          echo "baseline=${baseline_sha}" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor "$upstream_sha" "$baseline_sha" && [ "${{ inputs.force }}" != "true" ]; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "QWLeague is already reviewed at ${upstream_sha}."
+          elif ! git merge-base --is-ancestor "$baseline_sha" "$upstream_sha"; then
+            echo "REFUSE: upstream history does not descend from the approved baseline ${baseline_sha}." >&2
+            exit 11
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enforce upstream path policy
+        if: steps.upstream.outputs.needed == 'true'
+        id: policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream_sha="${{ steps.upstream.outputs.sha }}"
+          baseline="${{ steps.upstream.outputs.baseline }}"
+          git diff --check "$baseline" "$upstream_sha"
+          git diff --name-only "$baseline" "$upstream_sha" | sort -u > upstream-changed-files.txt
+          git diff --stat "$baseline" "$upstream_sha" > upstream-diffstat.txt
+
+          # These files carry the maintained Antilag 1 / CSQC integration.
+          # Upstream touching one requires a deliberate local port, never an
+          # unattended merge.
+          protected='^(CMakeLists\.txt|include/(g_local|progs)\.h|qcsrc/.*|src/(antilag|client|g_userinfo|weaponpred_defs|weapons|world)\.c)$'
+          if grep -E "$protected" upstream-changed-files.txt; then
+            echo "REFUSE: upstream changed a protected Antilag/CSQC integration path." >&2
+            exit 20
+          fi
+
+          # No spray feature may enter through this integration route.
+          if git diff --ignore-space-at-eol "$baseline" "$upstream_sha" | grep -Ei '^\+.*(sv_sprays|svc_spray|spray[[:space:]_]*(decal|packet|entity)|csqc.*spray)' >/dev/null; then
+            echo "REFUSE: upstream diff contains spray-related functionality." >&2
+            exit 21
+          fi
+
+          echo "baseline=${baseline}" >> "$GITHUB_OUTPUT"
+
+      - name: Merge upstream into a review branch
+        if: steps.upstream.outputs.needed == 'true'
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream_sha="${{ steps.upstream.outputs.sha }}"
+          branch="automation/qwleague-${upstream_sha:0:12}"
+          git config user.name "qwleague-upstream-bot"
+          git config user.email "qwleague-upstream-bot@users.noreply.github.com"
+          git switch -c "$branch"
+
+          if ! git merge --no-ff --no-commit "qwleague/${UPSTREAM_BRANCH}"; then
+            git merge --abort || true
+            echo "QWLeague merge conflict for ${upstream_sha}. Manual Antilag integration is required." >&2
+            exit 1
+          fi
+
+          git diff --cached --check
+          git diff --cached --name-status > integration-changed-files.txt
+          git diff --cached --stat > integration-diffstat.txt
+
+          # Invariants of the approved Antilag 1 and CSQC implementation.
+          test -f qcsrc/pred.qc
+          test -f qcsrc/projectiles.qc
+          test -f qcsrc/weapon_table.qc
+          test ! -e qcsrc/weaponpred.qc
+          grep -q 'WEAPONINFO_GENERATION_SHIFT' include/progs.h
+          grep -q 'WeaponPrediction_ClientReady' src/client.c
+          grep -q 'cvar("sv_antilag") != 1' src/antilag.c
+          if git diff --cached -U0 | grep -Ei '^\+.*(sv_sprays|svc_spray|spray[[:space:]_]*(decal|packet|entity)|csqc.*spray)' >/dev/null; then
+            echo "REFUSE: merged integration contains spray-related functionality." >&2
+            exit 22
+          fi
+
+          git commit -m "Merge QWLeague ${upstream_sha:0:12} into Antilag 1 fork"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and verify the KTX gamecode
+        if: steps.upstream.outputs.needed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential cmake binutils
+          cmake -S . -B build
+          cmake --build build --parallel
+          test -s build/qwprogs.so
+          nm -a build/qwprogs.so > qwleague-symbols.txt
+          grep -q '[[:space:]]antilag_lagmove_all_hitscan$' qwleague-symbols.txt
+          grep -q '[[:space:]]antilag_lagmove_all_proj$' qwleague-symbols.txt
+          grep -q '[[:space:]]SendEntity_Projectile$' qwleague-symbols.txt
+          grep -q '[[:space:]]mm_player_token$' qwleague-symbols.txt
+          grep -q 'cvar("sv_antilag") != 1' src/antilag.c
+          sha256sum build/qwprogs.so | tee qwleague-integration-sha256.txt
+
+      - name: Write review summary
+        if: steps.upstream.outputs.needed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "# Automated QWLeague integration review"
+            echo
+            echo "- Base branch: \`${FORK_BRANCH}\`"
+            echo "- Upstream commit: \`${{ steps.upstream.outputs.sha }}\`"
+            echo "- Upstream baseline: \`${{ steps.policy.outputs.baseline }}\`"
+            echo "- Deployment: **not permitted from GitHub Actions**"
+            echo
+            echo "## Upstream files"
+            echo '```text'
+            cat upstream-changed-files.txt
+            echo '```'
+            echo
+            echo "## Integration files"
+            echo '```text'
+            cat integration-changed-files.txt
+            echo '```'
+            echo
+            echo "Manual release gates still required: matching CSQC, latest Dusty MVDSV, full audit, controlled runtime test, and an idle QWLeague `29xxx` server."
+          } > integration-summary.md
+
+      - name: Publish integration build evidence
+        if: steps.upstream.outputs.needed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwleague-integration-${{ steps.upstream.outputs.sha }}
+          path: |
+            build/qwprogs.so
+            qwleague-integration-sha256.txt
+            upstream-changed-files.txt
+            upstream-diffstat.txt
+            integration-changed-files.txt
+            integration-diffstat.txt
+            integration-summary.md
+          retention-days: 30
+
+      - name: Push review branch and open pull request
+        if: steps.upstream.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="${{ steps.merge.outputs.branch }}"
+          upstream_sha="${{ steps.upstream.outputs.sha }}"
+          if git ls-remote --exit-code --heads origin "${branch}" > /dev/null; then
+            echo "Review branch ${branch} already exists; reusing it."
+          else
+            git push origin "${branch}"
+          fi
+
+          # GITHUB_TOKEN-created PRs do not trigger pull_request workflows.
+          gh workflow run qwleague-validation.yml --ref "$branch"
+
+          existing_pr="$(gh pr list \
+            --state open \
+            --base "${FORK_BRANCH}" \
+            --head "${branch}" \
+            --json number \
+            --jq '.[0].number')"
+
+          if [ -n "${existing_pr}" ]; then
+            echo "Integration PR #${existing_pr} already exists; reusing it."
+          else
+            gh pr create \
+              --base "${FORK_BRANCH}" \
+              --head "${branch}" \
+              --title "Merge QWLeague ${upstream_sha:0:12} into Antilag 1 fork" \
+              --body-file integration-summary.md
+          fi
