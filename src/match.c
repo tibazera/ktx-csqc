@@ -2236,6 +2236,30 @@ void mm_prewar_think(void)
 	cvar_fset("k_count", delay);
 	G_bprint(PRINT_HIGH, "%s\n",
 			redtext(va("Warmup over - match starts in %d seconds.", delay)));
+	// The client f_ checks KTX runs from PlayerReady when the countdown starts
+	// never fire here (PlayerReady returns early on a matchmade server), so run
+	// them now. Asking one player is enough: every client answers another
+	// player's f_ request.
+	for (p = world; (p = find_plr(p));)
+	{
+		if (p->isBot)
+		{
+			continue;
+		}
+		if (cvar("k_on_start_f_modified"))
+		{
+			stuffcmd(p, "say f_modified\n");
+		}
+		if (cvar("k_on_start_f_ruleset"))
+		{
+			stuffcmd(p, "say f_ruleset\n");
+		}
+		if (cvar("k_on_start_f_version"))
+		{
+			stuffcmd(p, "say f_version\n");
+		}
+		break;
+	}
 	StartTimer();
 	ent_remove(self);
 }

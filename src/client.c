@@ -1402,12 +1402,56 @@ qbool CanConnect(void)
 			const char *my_token = ezinfokey(self, "qwleague_token");
 			if (!mm_token_allowed(my_token))
 			{
+				// Rostered players always have a token in k_allowed_tokens (late
+				// joins and reconnects included), so anyone landing here either
+				// sent no token (bare qw:// link / server browser connect) or a
+				// stale one from an earlier match. Point them at their match
+				// page for the right connect command — never "queue again".
+				const char *url = cvar_string("k_qwleague_url");
+				const char *match_id = cvar_string("k_match_id");
+				char page[256];
+
+				if (url[0] && match_id[0])
+				{
+					snprintf(page, sizeof(page), "%s/match/%s", url, match_id);
+				}
+				else
+				{
+					strlcpy(page, url, sizeof(page));
+				}
+
+				if (!my_token[0])
+				{
+					G_sprint(self, 2,
+							"%s\n"
+							"This QWLeague server needs a match token.\n"
+							"Paste the connect command from your\n"
+							"match page into an empty console line.\n",
+							redtext("access denied"));
+				}
+				else
+				{
+					G_sprint(self, 2,
+							"%s\n"
+							"Your token is for a different match.\n"
+							"Copy the connect command again from\n"
+							"your match page.\n",
+							redtext("access denied"));
+				}
+
+				if (page[0])
+				{
+					G_sprint(self, 2, "%s\n", page);
+				}
+
+				// ezQuake has a paste bug that can eat strings pasted into the
+				// console. Mention the known workarounds so a stuck player can
+				// self-serve instead of thinking the server is broken.
 				G_sprint(self, 2,
-						"%s\n"
-						"This server is reserved for a specific matchmade game.\n"
-						"Visit %s to queue for a match.\n",
-						redtext("access denied"),
-						cvar_string("k_qwleague_url"));
+						"If pasting fails, try\n"
+						"vid_grab_keyboard 0 - or restart\n"
+						"your client and paste again.\n");
+
 				return false;
 			}
 
@@ -1513,9 +1557,10 @@ qbool CanConnect(void)
 					{
 						G_sprint(self, 2,
 								"%s\n"
-								"This match token is already in use by a connected "
-								"player. If this is your account, your token may "
-								"have leaked - return to the website and queue again.\n",
+								"This token is already connected -\n"
+								"often your own ghost or a second client.\n"
+								"Wait a few seconds and reconnect.\n"
+								"If it keeps failing, contact an admin.\n",
 								redtext("token in use"));
 						return false;
 					}
