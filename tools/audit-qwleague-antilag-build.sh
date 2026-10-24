@@ -29,7 +29,7 @@ antilag_lagmove_all_proj_bounce
 SendEntity_Projectile
 UpdateProjectileSendNeeded
 mm_player_token
-mm_forced_color
+mm_forced_colors
 mm_shutdown_think'
 
 symbols="$(nm -a "$binary" 2>/dev/null || true)"
