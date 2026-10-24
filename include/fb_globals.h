@@ -363,6 +363,7 @@ void BotsBackpackTouchedNonPlayer(gedict_t *backpack, gedict_t *entity);
 void BotsMatchStart(void);
 void BotsAssignTeamFlags(void);
 qbool HasWeapon(gedict_t *player, int weapon);
+#ifdef BOT_SUPPORT
 int FrogbotSkillLevel(void);
 int FrogbotHealth(void);
 int FrogbotWeapon(void);
@@ -370,6 +371,7 @@ int FrogbotQuadMultiplier(void);
 qbool FrogbotItemPickupBonus(void);
 qbool FrogbotEasySkillMode(void);
 qbool FrogbotBreakOnDeath(void);
+#endif
 
 // botthink.qc
 void SetMarker(gedict_t *client, gedict_t *marker);
