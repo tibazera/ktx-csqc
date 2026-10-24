@@ -83,6 +83,8 @@ void trap_changelevel(const char *name, const char *entityname);
 intptr_t trap_multicast(float origin_x, float origin_y, float origin_z, intptr_t to);
 void trap_logfrag(intptr_t killer, intptr_t killee);
 void trap_infokey(intptr_t edn, char *key, char *valbuff, intptr_t sizebuff);
+// Reserve size bytes for the next reliable message to msg_entity; returns success.
+intptr_t trap_ClientReliableCheckBlock(intptr_t size);
 void trap_WriteByte(intptr_t to, intptr_t data);
 void trap_WriteChar(intptr_t to, intptr_t data);
 void trap_WriteShort(intptr_t to, intptr_t data);

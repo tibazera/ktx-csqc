@@ -15,35 +15,56 @@ static qbool WeaponDefinition_Exists(int weapon_index)
 	return wep->modelindex || wep->anim_number;
 }
 
-static qbool WeaponDefinition_WriteTo(int to, int weapon_index, int sendflags)
+// A negative destination measures the same serializer without writing any bytes.
+static int WeaponDefinition_WriteByte(int to, int value)
+{
+	if (to >= 0)
+	{
+		WriteByte(to, value);
+	}
+	return 1;
+}
+
+static int WeaponDefinition_WriteShort(int to, int value)
+{
+	if (to >= 0)
+	{
+		WriteShort(to, value);
+	}
+	return 2;
+}
+
+// Return the exact wire size, including when only measuring with destination -1.
+static int WeaponDefinition_WriteTo(int to, int weapon_index, int sendflags)
 {
 	weppreddef_t *wep;
 	int i, k;
+	int size = 0;
 
 	if (weapon_index < 0 || weapon_index >= (int)(sizeof(wpredict_definitions) / sizeof(wpredict_definitions[0])))
 	{
-		return false;
+		return 0;
 	}
 
 	sendflags &= WEAPONDEF_INIT | WEAPONDEF_FLAGS | WEAPONDEF_ANIM;
 
-	WriteByte(to, EZCSQC_WEAPONDEF);
-	WriteByte(to, sendflags);
+	size += WeaponDefinition_WriteByte(to, EZCSQC_WEAPONDEF);
+	size += WeaponDefinition_WriteByte(to, sendflags);
 
 	wep = &wpredict_definitions[weapon_index];
-	WriteByte(to, weapon_index);
+	size += WeaponDefinition_WriteByte(to, weapon_index);
 
 	if (sendflags & WEAPONDEF_INIT)
 	{
-		WriteShort(to, wep->attack_time);
-		WriteShort(to, wep->modelindex);
+		size += WeaponDefinition_WriteShort(to, wep->attack_time);
+		size += WeaponDefinition_WriteShort(to, wep->modelindex);
 	}
 
 	if (sendflags & WEAPONDEF_FLAGS)
 	{
 		int bitmask = 0;
 
-		WriteByte(to, wep->impulse);
+		size += WeaponDefinition_WriteByte(to, wep->impulse);
 
 		for (i = 0; i < 24; i++)
 		{
@@ -51,67 +72,68 @@ static qbool WeaponDefinition_WriteTo(int to, int weapon_index, int sendflags)
 			if (bitmask & wep->itemflag)
 			{
 				bitmask = -1;
-				WriteByte(to, i);
+				size += WeaponDefinition_WriteByte(to, i);
 				break;
 			}
 		}
 		if (bitmask != -1)
 		{
-			WriteByte(to, 255);
+			size += WeaponDefinition_WriteByte(to, 255);
 		}
 	}
 
 	if (sendflags & WEAPONDEF_ANIM)
 	{
-		WriteByte(to, wep->anim_number & 255);
+		size += WeaponDefinition_WriteByte(to, wep->anim_number & 255);
 		for (i = 0; i < wep->anim_number; i++)
 		{
 			weppredanim_t *anim = &wep->anim_states[i];
 
-			WriteByte(to, anim->mdlframe + 127);
-			WriteByte(to, anim->flags);
+			size += WeaponDefinition_WriteByte(to, anim->mdlframe + 127);
+			size += WeaponDefinition_WriteByte(to, anim->flags);
 			if (anim->flags & WEPPREDANIM_MOREBYTES)
 			{
-				WriteByte(to, anim->flags >> 8);
+				size += WeaponDefinition_WriteByte(to, anim->flags >> 8);
 			}
 			if (anim->flags & WEPPREDANIM_SOUND)
 			{
-				WriteShort(to, anim->sound);
-				WriteShort(to, anim->soundmask);
+				size += WeaponDefinition_WriteShort(to, anim->sound);
+				size += WeaponDefinition_WriteShort(to, anim->soundmask);
 			}
 			if (WEPPREDANIM_HAS(anim->flags, WEPPREDANIM_SOUND2))
 			{
-				WriteShort(to, anim->sound2);
-				WriteShort(to, anim->soundmask2);
+				size += WeaponDefinition_WriteShort(to, anim->sound2);
+				size += WeaponDefinition_WriteShort(to, anim->soundmask2);
 			}
 			if (anim->flags & WEPPREDANIM_PROJECTILE)
 			{
-				WriteShort(to, anim->projectile_model);
+				size += WeaponDefinition_WriteShort(to, anim->projectile_model);
 				for (k = 0; k < 3; k++)
 				{
-					WriteShort(to, anim->projectile_velocity[k]);
+					size += WeaponDefinition_WriteShort(to, anim->projectile_velocity[k]);
 				}
 				for (k = 0; k < 3; k++)
 				{
-					WriteByte(to, anim->projectile_offset[k] & 255);
+					size += WeaponDefinition_WriteByte(to, anim->projectile_offset[k] & 255);
 				}
 			}
-			WriteByte(to, anim->nextanim);
+			size += WeaponDefinition_WriteByte(to, anim->nextanim);
 			if (anim->flags & WEPPREDANIM_BRANCH)
 			{
-				WriteByte(to, anim->altanim);
+				size += WeaponDefinition_WriteByte(to, anim->altanim);
 			}
-			WriteByte(to, anim->length / 10);
+			size += WeaponDefinition_WriteByte(to, anim->length / 10);
 		}
 	}
 
-	return true;
+	return size;
 }
 
 void WPredict_SendDefinitionsTo(gedict_t *player)
 {
 	int i;
 	int count = 0;
+	int size = 3; // service byte, setup version and definition count
 	int old_msg_entity;
 
 	if (!player)
@@ -123,8 +145,9 @@ void WPredict_SendDefinitionsTo(gedict_t *player)
 	 * Native EZCSQC clients only. This writes svc 77, which FTE reads as
 	 * svcfte_precache and would silently desync on; clients running our csprogs
 	 * have these definitions compiled in and must never be sent them.
+	 * Older servers without whole-message reservation leave prediction disabled.
 	 */
-	if (!iKey(player, "ezcsqc"))
+	if (!iKey(player, "ezcsqc") || !HAVEEXTENSION(G_CLIENTRELIABLECHECKBLOCK))
 	{
 		return;
 	}
@@ -134,11 +157,20 @@ void WPredict_SendDefinitionsTo(gedict_t *player)
 		if (WeaponDefinition_Exists(i))
 		{
 			count++;
+			size += WeaponDefinition_WriteTo(-1, i, SENDFLAGS_ALL);
 		}
 	}
 
 	old_msg_entity = g_globalvars.msg_entity;
 	g_globalvars.msg_entity = EDICT_TO_PROG(player);
+	/* The client parses the whole setup in one packet. Reserve it before any
+	 * field writes can fill the current reliable buffer and rotate it.
+	 */
+	if (!trap_ClientReliableCheckBlock(size))
+	{
+		g_globalvars.msg_entity = old_msg_entity;
+		return;
+	}
 	WriteByte(MSG_ONE_NORECORD, SVC_EZCSQC_SETUP);
 	WriteByte(MSG_ONE_NORECORD, 1);
 	WriteByte(MSG_ONE_NORECORD, count);

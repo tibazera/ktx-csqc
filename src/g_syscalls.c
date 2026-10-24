@@ -291,6 +291,11 @@ void trap_infokey(intptr_t edn, char *key, char *valbuff, intptr_t sizebuff)
 	syscall(G_GETINFOKEY, edn, (intptr_t) key, (intptr_t) valbuff, sizebuff);
 }
 
+intptr_t trap_ClientReliableCheckBlock(intptr_t size)
+{
+	return syscall(G_CLIENTRELIABLECHECKBLOCK, size);
+}
+
 void trap_WriteByte(intptr_t to, intptr_t data)
 {
 	syscall(G_WRITEBYTE, to, data);

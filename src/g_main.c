@@ -669,6 +669,7 @@ static qbool G_InitExtensions(void)
 		{"GetExtFieldPtr",		G_GETEXTFIELDPTR},
 		{"setsendneeded",		G_SETSENDNEEDED},
 		{"SetLastRuntime",		G_SETLASTRUNTIME},
+		{"ClientReliableCheckBlock", G_CLIENTRELIABLECHECKBLOCK},
 	};
 	int i;
 	for (i = 0; i < sizeof(exttraps)/sizeof(exttraps[0]); i++)
