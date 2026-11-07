@@ -8,7 +8,6 @@
 //
 //========================================================================
 #include "g_local.h"
-#include "fb_globals.h"
 
 int ANTILAG_MEMPOOL_WORLDSEEK;
 antilag_t ANTILAG_MEMPOOL[ANTILAG_MAXEDICTS];
