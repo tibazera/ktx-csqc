@@ -59,17 +59,29 @@ void GrappleReset(gedict_t *rhook)
 	owner->hook_out = false;
 	owner->s.v.weaponframe = 0;
 
+	// attack_finished is on the owner's predictable per-client clock (client_time),
+	// like every other weapon since weapon prediction was added. hook_reset_time
+	// is only compared against g_globalvars.time (GrappleThrow), so it stays on
+	// server time. Mixing the two clocks here is what caused the multi-second
+	// hook "cooldown" after every reset.
+	//
+	// Note: self is the hook entity here, not the player, so the rune check
+	// must read owner->ctf_flag.
 	if (cvar("k_ctf_hookstyle") == 1)
 	{
-		owner->attack_finished = (self->ctf_flag & CTF_RUNE_HST) ? 
-			g_globalvars.time + ((HOOK_FIRE_RATE / 2) / cvar("k_ctf_rune_power_hst")) : g_globalvars.time + (HOOK_FIRE_RATE / 2);
-		owner->hook_reset_time = (self->ctf_flag & CTF_RUNE_HST) ? 
-			g_globalvars.time + (HOOK_FIRE_RATE / cvar("k_ctf_rune_power_hst")) : g_globalvars.time + HOOK_FIRE_RATE;
-	}
+		float fire_rate = HOOK_FIRE_RATE;
 
+		if (owner->ctf_flag & CTF_RUNE_HST)
+		{
+			fire_rate /= cvar("k_ctf_rune_power_hst");
+		}
+
+		owner->attack_finished = owner->client_time + (fire_rate / 2);
+		owner->hook_reset_time = g_globalvars.time + fire_rate;
+	}
 	else
 	{
-		owner->attack_finished = g_globalvars.time;
+		owner->attack_finished = owner->client_time;
 		owner->hook_reset_time = g_globalvars.time;
 	}
 
