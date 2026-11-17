@@ -27,3 +27,4 @@ DEATHTYPE( dtSQUISH,		squish )
 DEATHTYPE( dtTRIGGER_HURT,	trigger )
 DEATHTYPE( dtSUICIDE,		suicide ) // client use /kill command
 DEATHTYPE( dtUNKNOWN,		unknown )
+DEATHTYPE( dtORB,			orb ) // orb mode's burst (orb.c); after unknown, so no number before it moves

@@ -94,6 +94,7 @@ set(SRC_COMMON
 	"${DIR_SRC}/match.c"
 	"${DIR_SRC}/mathlib.c"
 	"${DIR_SRC}/misc.c"
+	"${DIR_SRC}/orb.c"
 	"${DIR_SRC}/motd.c"
 	"${DIR_SRC}/plats.c"
 	"${DIR_SRC}/player.c"

@@ -763,6 +763,77 @@ void execute_changelevel(void)
 	}
 }
 
+// qwleague: the series' epilogue (match.c) — the intermission a client at a
+// time while the game goes on for the rest: at its start for those not on
+// QWLeague's client (frozen at its spot as ever, every player hidden from them,
+// so none of the epilogue's players reach them), then for everyone else as it
+// ends. Each client is sent it once (whose: its userid, a slot being reused).
+static int mm_intermission_uid[MAX_CLIENTS];   // by slot: the client sent it (0: none)
+
+void mm_intermission_begin(void)
+{
+	memset(mm_intermission_uid, 0, sizeof(mm_intermission_uid));
+	intermission_spot = FindIntermission();
+}
+
+qbool mm_intermission_sent(gedict_t *p)
+{
+	int i = NUM_FOR_EDICT(p) - 1;
+
+	return i >= 0 && i < MAX_CLIENTS && mm_intermission_uid[i] && mm_intermission_uid[i] == GetUserID(p);
+}
+
+// One client into it (a player frozen there, as execute_changelevel does).
+void mm_intermission_one(gedict_t *p)
+{
+	gedict_t *oself = self;
+	int i = NUM_FOR_EDICT(p) - 1;
+
+	if (i < 0 || i >= MAX_CLIENTS || mm_intermission_sent(p))
+	{
+		return;
+	}
+
+	mm_intermission_uid[i] = GetUserID(p);
+	if (!p->isBot)
+	{
+		self = p;
+		SendIntermissionToClient();
+		self = oself;
+	}
+	p->hideplayers = true;
+
+	if (p->ct != ctPlayer)
+	{
+		return;
+	}
+
+	intermission_set_player_flags(p);
+	if (iKey(p, "kf") & KF_SCREEN)
+	{
+		stuffcmd_flags(p, STUFFCMD_IGNOREINDEMO, "wait; wait; wait; wait; wait; wait; screenshot\n");
+	}
+}
+
+// The epilogue over: the intermission for everyone not in it yet, its wait
+// as execute_changelevel's.
+void mm_intermission_rest(void)
+{
+	gedict_t *p;
+
+	intermission_running = 1;
+	intermission_exittime = g_globalvars.time + 1 + max(1, cvar("demo_scoreslength"));
+
+	for (p = world; (p = find_plr(p));)
+	{
+		mm_intermission_one(p);
+	}
+	for (p = world; (p = find_spc(p));)
+	{
+		mm_intermission_one(p);
+	}
+}
+
 void changelevel_touch(void)
 {
 	if (other->ct != ctPlayer)
@@ -2325,6 +2396,10 @@ void PutClientInServer(void)
 	self->on_hook = false;
 	self->hook_out = false;
 	self->maxspeed = cvar("sv_maxspeed"); // qqshka - ctf stuff, discard haste rune modifier after u die
+	if (mm_epilogue_maxspeed() > 0)
+	{
+		self->maxspeed = mm_epilogue_maxspeed(); // qwleague: respawned in the series' slowed epilogue
+	}
 	self->regen_time = -1;
 	self->carrier_hurt_time = -1;
 	self->ctf_flag = 0;
@@ -2425,6 +2500,13 @@ void PutClientInServer(void)
 	if (intermission_running)
 	{
 		intermission_set_player_flags(self);
+	}
+
+	// qwleague: (re)joined in the series' epilogue, not on QWLeague's client:
+	// the intermission, as ever
+	if ((mm_epilogue_maxspeed() > 0) && !self->isBot && (iKey(self, "qwl") < 1))
+	{
+		mm_intermission_one(self);
 	}
 
 	setsize(self, PASSVEC3(VEC_HULL_MIN), PASSVEC3(VEC_HULL_MAX));
@@ -4406,6 +4488,11 @@ void PlayerPreThink(void)
 		return;					// the think tics
 	}
 
+	if (mm_epilogue_out(self))
+	{
+		return;					// qwleague: in the intermission while the series' epilogue plays on
+	}
+
 	if (isRA())
 	{
 		RocketArenaPre();
@@ -5033,7 +5120,7 @@ void PlayerPostThink(void)
 
 	WS_CheckUpdate(self);
 
-	if (intermission_running)
+	if (intermission_running || mm_epilogue_out(self))
 	{
 		setorigin(self, PASSVEC3(intermission_spot->s.v.origin));
 		SetVector(self->s.v.velocity, 0, 0, 0); 	// don't stray off the intermission spot too far
@@ -5081,7 +5168,10 @@ void PlayerPostThink(void)
 	}
 #endif
 
-	W_WeaponFrame();
+	if (!mm_epilogue_holds_fire())
+	{
+		W_WeaponFrame();	// qwleague: none while players on other clients wait in the intermission
+	}
 
 	//
 	// Antilag and Weapon Prediction
@@ -5853,6 +5943,10 @@ void ClientObituary(gedict_t *targ, gedict_t *attacker)
 			{
 				deathstring = va(" electrocutes %s\n", g_himself(targ));
 			}
+			else if (dtORB == targ->deathtype)
+			{
+				deathstring = " sat on their own orb\n";
+			}
 			else if (dtSQUISH == targ->deathtype)
 			{ //similar code present in case where !(attacker->ct == ctPlayer)
 				deathstring = " was squished\n";
@@ -6215,6 +6309,11 @@ void ClientObituary(gedict_t *targ, gedict_t *attacker)
 						deathstring = " accepts ";
 						deathstring2 = "'s discharge\n";
 				}
+			}
+			else if (dtORB == targ->deathtype)
+			{
+				deathstring = " was zapped by ";
+				deathstring2 = "'s orb\n";
 			}
 			else
 			{

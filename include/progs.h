@@ -1114,6 +1114,19 @@ typedef struct gedict_s
 	pos_t pos[MAX_POSITIONS];				// for player pos_save / pos_move
 	float pos_move_time;					// for player pos_save / pos_move
 
+// { orb mode (orb.c)
+	struct gedict_s *orb;					// player: the orb out, or NULL
+	float orb_ready_time;					// player: when the next orb may be thrown
+	float orb_launch_time;					// orb: when it was thrown
+	float orb_move_time;					// orb: when it last moved
+	float orb_die_time;						// orb: when a stuck orb goes
+	qbool orb_stuck;						// orb: stuck to something
+	vec3_t orb_normal;						// orb: the surface it stuck to faces this way
+	struct gedict_s *orb_anchor;			// orb: the brush or teleporter it stuck to, or NULL
+	vec3_t orb_anchor_ofs;					// orb: where it sits on the anchor
+	vec3_t orb_thrown_from;					// orb: its thrower's origin at the throw, where they stood
+// }
+
 // { CTF
 	struct gedict_s *hook;					// grapple
 	qbool on_hook;						// are we on the grapple?

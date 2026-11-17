@@ -561,6 +561,7 @@ const char CD_NODESC[] = "no desc";
 #define CD_WREG				"register reliable wpns"
 #define CD_KILL				"invoke suicide"
 #define CD_MIDAIR			"turn midair mode on/off"
+#define CD_ORB				"throw your orb / teleport to it"
 #define CD_MIDAIR_MINHEIGHT	"midair minimum frag height"
 #define CD_FRESHTEAMS		"freshteams dmm1 settings"
 #define CD_FRESHPACKS		"limit ammo in backpacks"
@@ -956,6 +957,7 @@ cmd_t cmds[] =
 	{ "wreg", 						cmd_wreg, 						0, 			CF_BOTH | CF_MATCHLESS | CF_PARAMS, 									CD_WREG },
 	{ "kill", 						ClientKill, 					0, 			CF_PLAYER | CF_MATCHLESS, 												CD_KILL },
 	{ "midair", 					ToggleMidair, 					0, 			CF_PLAYER | CF_SPC_ADMIN | CF_RULES, 												CD_MIDAIR },
+	{ "orb", 						Orb_Command, 					0, 			CF_PLAYER | CF_MATCHLESS | CF_NOALIAS, 									CD_ORB },
 	{ "midair_minheight", 			SetMidairMinHeight, 			0, 			CF_PLAYER | CF_SPC_ADMIN | CF_RULES, 												CD_MIDAIR_MINHEIGHT },
 	{ "fresh", 						ToggleFreshTeams, 				0, 			CF_PLAYER | CF_SPC_ADMIN | CF_RULES, 												CD_FRESHTEAMS },
 	{ "freshpacks", 				ToggleFreshPacks, 				0, 			CF_PLAYER | CF_SPC_ADMIN | CF_RULES, 												CD_FRESHPACKS },

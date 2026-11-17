@@ -276,6 +276,8 @@ void SP_worldspawn(void)
 	trap_precache_sound("player/axhit1.wav");	// ax hit meat
 	trap_precache_sound("player/axhit2.wav");	// ax hit world
 
+	Orb_Precache();	// orb mode's files: its stock ones always, the QWLeague client's with k_orb on
+
 	trap_precache_sound("player/h2ojump.wav");	// player jumping into water
 	trap_precache_sound("player/slimbrn2.wav");	// player enter slime
 	trap_precache_sound("player/inh2o.wav");	// player enter water
@@ -983,6 +985,9 @@ void FirstFrame(void)
 //}
 	RegisterCvar("k_spec_info");
 	RegisterCvar("k_midair");
+	RegisterCvar("k_orb");
+	RegisterCvar("k_orb_cooldown");
+	RegisterCvar("k_orb_life");
 	RegisterCvarEx("k_midair_minheight", "1");
 
 	RegisterCvarEx("k_killquad", "0");
@@ -1120,6 +1125,11 @@ void FirstFrame(void)
 	// k_shutdown_on_end: when 1, the server `quit`s itself after MatchEndStats.
 	// Used by the qwleague-agent so per-match mvdsv processes terminate cleanly.
 	RegisterCvarEx("k_shutdown_on_end", "0");
+	// k_qwl_epilogue: seconds of play, slowed, after a matchmade series ends,
+	// before the intermission — for the players on QWLeague's own client
+	// (userinfo `qwl`) only; everyone else gets the usual end, the
+	// intermission at once. 0 turns it off (mm_epilogue_begin in match.c).
+	RegisterCvarEx("k_qwl_epilogue", "7");
 	// qwleague Bo3/BoN series: one matchmade server plays an ordered list of
 	// maps, tracking the series score, and only self-terminates once a team
 	// clinches (k_series_bestof/2 + 1 wins) or the maps run out. bestof 1

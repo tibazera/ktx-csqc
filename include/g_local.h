@@ -659,6 +659,11 @@ void spawn_tfog(vec3_t org);
 
 void teleport_player(gedict_t *player, vec3_t origin, vec3_t angles, int flags);
 
+// orb.c
+void Orb_Precache(void);
+void Orb_Command(void);
+void Orb_MatchStart(void);
+
 #define TELEDEATH(e) ((e)->deathtype == dtTELE1 || (e)->deathtype == dtTELE2 || (e)->deathtype == dtTELE3)
 
 // runes.c
@@ -1337,6 +1342,14 @@ void mm_prewar_think(void);
 void mm_abandon_think(void);
 void mm_notify_aborted(void);
 void mm_prematch_clocks_reset(void);
+float mm_epilogue_maxspeed(void);
+qbool mm_epilogue_out(gedict_t *p);
+qbool mm_epilogue_holds_fire(void);
+void mm_intermission_begin(void);
+qbool mm_intermission_sent(gedict_t *p);
+void mm_intermission_one(gedict_t *p);
+void mm_intermission_rest(void);
+void execute_changelevel(void);
 
 // set when match is starting, otherwise a normal spawn
 extern qbool initial_match_spawns;

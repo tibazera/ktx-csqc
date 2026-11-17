@@ -428,6 +428,10 @@ static void mm_series_team_frags(int *out_t1, int *out_t2)
 // teardown path can't post a resultless match that lets the abandoner dodge Elo.
 static void mm_resolve_pending_forfeit_on_end(void);
 
+static void mm_epilogue_begin(void);
+static qbool mm_epilogue_running = false;   // the series' epilogue on (mm_epilogue_begin)...
+static qbool mm_epilogue_mixed = false;     // ...someone waiting in the intermission meanwhile
+
 void EndMatch(float skip_log)
 {
 	gedict_t *p;
@@ -741,7 +745,155 @@ void EndMatch(float skip_log)
 		// Let players know the matchmade server is about to recycle.
 		G_bprint(PRINT_HIGH, "%s\n",
 				redtext("GG! Match complete - server closes in 15 seconds."));
+
+		// qwleague: the series played out to its end (not a forfeit, not
+		// aborted): its epilogue, for those on QWLeague's client.
+		if (deathmatch && !isHoonyModeAny() && !isCA() && !isRACE() && !k_bloodfest
+				&& !cvar("k_match_aborted") && !cvar_string("k_match_forfeit_loser")[0])
+		{
+			mm_epilogue_begin();
+		}
 	}
+}
+
+// qwleague: the series' epilogue — a few seconds more of the game after its
+// end, slowed, before the intermission, for the players on QWLeague's own
+// client (it sets userinfo `qwl`), which draws its VICTORY / DEFEAT over the
+// game going on and slows the mouse itself. Everyone else gets exactly the
+// usual end: the intermission at once, every player hidden from them, and —
+// while any of them waits there — no one fires, so nothing of the epilogue
+// reaches them. No one on QWLeague's client: no epilogue at all. The result is
+// final before it: stats posted, the demo stopped right at the end (its
+// epilogue isn't the match's: not in the demo, nor QTV's stream), and frags in
+// it don't count (each player's put back as it ends). Its length goes out in
+// serverinfo `qwl_epilogue` (the client's cue).
+#define MM_EPILOGUE_SPEED 100   // its top speed (sv_maxspeed's usual 320)
+
+static float mm_epilogue_frags[MAX_CLIENTS];   // each player slot's frags at the end...
+static int mm_epilogue_uid[MAX_CLIENTS];       // ...whose they were...
+static qbool mm_epilogue_kept[MAX_CLIENTS];    // ...(none kept: false)
+
+// The top speed while it runs (0: it isn't).
+float mm_epilogue_maxspeed(void)
+{
+	return mm_epilogue_running ? MM_EPILOGUE_SPEED : 0;
+}
+
+// p waits in the intermission while it runs.
+qbool mm_epilogue_out(gedict_t *p)
+{
+	return mm_epilogue_running && mm_intermission_sent(p);
+}
+
+qbool mm_epilogue_holds_fire(void)
+{
+	return mm_epilogue_running && mm_epilogue_mixed;
+}
+
+// A player on QWLeague's client.
+static qbool mm_epilogue_ours(gedict_t *p)
+{
+	return !p->isBot && (iKey(p, "qwl") >= 1);
+}
+
+// Its end: the frags as they were, full speed again, then the intermission for
+// everyone not in it yet.
+static void mm_epilogue_end(void)
+{
+	gedict_t *p;
+
+	for (p = world; (p = find_plr(p));)
+	{
+		int i = NUM_FOR_EDICT(p) - 1;
+
+		if (i >= 0 && i < MAX_CLIENTS && mm_epilogue_kept[i] && mm_epilogue_uid[i] == GetUserID(p))
+		{
+			p->s.v.frags = mm_epilogue_frags[i];
+		}
+		p->maxspeed = cvar("sv_maxspeed");
+	}
+
+	mm_epilogue_running = false;
+	mm_epilogue_mixed = false;
+	localcmd("serverinfo qwl_epilogue \"\"\n");
+	ent_remove(self);
+	mm_intermission_rest();
+}
+
+// Each player's frags kept; those on QWLeague's client (and bots) slowed, the
+// rest — and spectators — into the intermission.
+static void mm_epilogue_split(void)
+{
+	gedict_t *p;
+
+	memset(mm_epilogue_kept, 0, sizeof(mm_epilogue_kept));
+	for (p = world; (p = find_plr(p));)
+	{
+		int i = NUM_FOR_EDICT(p) - 1;
+
+		if (i >= 0 && i < MAX_CLIENTS)
+		{
+			mm_epilogue_frags[i] = p->s.v.frags;
+			mm_epilogue_uid[i] = GetUserID(p);
+			mm_epilogue_kept[i] = true;
+		}
+		if (p->isBot || mm_epilogue_ours(p))
+		{
+			p->maxspeed = MM_EPILOGUE_SPEED;
+		}
+		else
+		{
+			mm_intermission_one(p);
+			mm_epilogue_mixed = true;
+		}
+	}
+	for (p = world; (p = find_spc(p));)
+	{
+		mm_intermission_one(p);
+	}
+}
+
+// Called at the series' end, after NextLevel: held off, the game slowed for
+// those on QWLeague's client; none on it, nothing (the intermission comes).
+static void mm_epilogue_begin(void)
+{
+	gedict_t *p, *e;
+	float secs = bound(0, cvar("k_qwl_epilogue"), 15);
+	qbool any = false;
+
+	for (p = world; (p = find_plr(p));)
+	{
+		any |= mm_epilogue_ours(p);
+	}
+	if (secs <= 0 || mm_epilogue_running || !any)
+	{
+		return;
+	}
+
+	if (!strnull(cvar_string("serverdemo")))
+	{
+		localcmd("stop\n"); // the demo ends with the match (else it would run on through the epilogue)
+	}
+
+	// NextLevel's intermission trigger (the map's own changelevels have no think)
+	for (e = world; (e = find(e, FOFCLSN, "trigger_changelevel"));)
+	{
+		if (e->think == (func_t) execute_changelevel)
+		{
+			ent_remove(e);
+		}
+	}
+
+	mm_epilogue_running = true;
+	mm_epilogue_mixed = false;
+	mm_intermission_begin();
+	mm_epilogue_split();
+	localcmd("serverinfo qwl_epilogue %d\n", (int) secs);
+
+	e = spawn();
+	e->classname = "mm_epilogue";
+	e->think = (func_t) mm_epilogue_end;
+	e->s.v.nextthink = g_globalvars.time + secs;
 }
 
 // Pre-match clocks. These are per-MAP BUDGETS, not per-ticker timers: leaving
@@ -773,6 +925,8 @@ void mm_prematch_clocks_reset(void)
 {
 	mm_wait_left = (int) bound(30, cvar("k_match_join_deadline"), 600);
 	mm_warmup_left = (int) bound(10, cvar("k_mm_warmup"), 600);
+	mm_epilogue_running = false;   // (a map loaded mid-epilogue: none on this one)
+	mm_epilogue_mixed = false;
 	// The previous map's lineup must not decide who is "missing" from this one.
 	mm_lineup_reset();
 }
@@ -3718,6 +3872,8 @@ void StartMatch(void)
 	trap_executecmd(); // <- this really needed
 
 	first_rl_taken = false; // no one took rl yet
+
+	Orb_MatchStart();
 
 	SM_PrepareMap(); // remove/add some items from map regardind with dmm and game mode
 
