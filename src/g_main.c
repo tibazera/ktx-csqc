@@ -687,6 +687,7 @@ static qbool G_InitExtensions(void)
 		{"setsendneeded",		G_SETSENDNEEDED},
 		{"SetLastRuntime",		G_SETLASTRUNTIME},
 		{"ClientReliableCheckBlock", G_CLIENTRELIABLECHECKBLOCK},
+		{"railtrail",			G_RAILTRAIL},
 	};
 	int i;
 	for (i = 0; i < sizeof(exttraps)/sizeof(exttraps[0]); i++)
