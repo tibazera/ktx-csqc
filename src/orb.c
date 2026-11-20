@@ -19,6 +19,10 @@
  * draws (no tarbabies in deathmatch); QWLeague's client draws it as an
  * electric burst where it saw an orb.
  *
+ * Its owner's client is told its state on every change, for QWLeague's HUD
+ * (orb_tell): "//qwl orb <ready in> <cooldown> <out> <left> <life>", a
+ * comment to any other client. Only where orb mode may be played (orb_files).
+ *
  * The orb is progs/s_light.spr with EF_RED | EF_GREEN | EF_BLUE: every
  * ezQuake draws that as a white light, and QWLeague's client recognises it
  * by the pair and draws it as a white sphere crackling with electricity.
@@ -46,6 +50,7 @@ void teleport_touch(void);
 #define ORB_SND_LAUNCH_STOCK	"weapons/ax1.wav"
 #define ORB_SND_HUM				"qwl/orb_hum.wav"		// looped: plays until replaced
 #define ORB_SND_HUM_STOCK		"ambience/hum1.wav"		// looped too
+#define ORB_SND_TELEPORT		"qwl/orb_teleport.wav"	// where the player left and where they land; stock: the teleporter's
 #define ORB_SND_STICK			"weapons/tink1.wav"
 #define ORB_SND_STOP			"misc/null.wav"
 
@@ -104,7 +109,32 @@ void Orb_Precache(void)
 	{
 		trap_precache_sound(ORB_SND_LAUNCH);
 		trap_precache_sound(ORB_SND_HUM);
+		trap_precache_sound(ORB_SND_TELEPORT);
 	}
+}
+
+// p's client told its orb's state, for QWLeague's HUD: "//qwl orb <ready in> <cooldown> <out> <left> <life>",
+// seconds, out 0 none, 1 flying, 2 stuck, left a stuck orb's time to its burst; "//qwl orb off" with orb mode off.
+// A comment to any other client (it starts "//"). Nothing where orb mode can't be played.
+static void orb_tell(gedict_t *p)
+{
+	gedict_t *orb = p->orb;
+	int out = !orb ? 0 : (orb->orb_stuck ? 2 : 1);
+
+	if (!orb_files || (p->ct != ctPlayer))
+	{
+		return;
+	}
+
+	if (!cvar("k_orb"))
+	{
+		stuffcmd(p, "//qwl orb off\n");
+
+		return;
+	}
+
+	stuffcmd(p, "//qwl orb %.2f %.2f %d %.2f %.2f\n", max(0, p->orb_ready_time - g_globalvars.time), orb_cooldown(),
+				out, (out == 2) ? max(0, orb->orb_die_time - g_globalvars.time) : 0, orb_life());
 }
 
 static void orb_remove(gedict_t *orb)
@@ -114,6 +144,7 @@ static void orb_remove(gedict_t *orb)
 	if (owner->orb == orb)
 	{
 		owner->orb = NULL;
+		orb_tell(owner);
 	}
 
 	// The hum loops on its channel until something replaces it.
@@ -271,6 +302,7 @@ static void orb_stick(gedict_t *orb, vec3_t point, vec3_t normal, gedict_t *anch
 
 	orb->orb_die_time = g_globalvars.time + orb_life();
 	sound(orb, CHAN_WEAPON, ORB_SND_STICK, 0.4, ATTN_NORM);
+	orb_tell(PROG_TO_EDICT(orb->s.v.owner));
 }
 
 // One frame of flight: move as far as the world and teleporters allow.
@@ -391,6 +423,7 @@ static void orb_launch(gedict_t *p)
 
 	p->orb = orb;
 	p->orb_ready_time = g_globalvars.time + orb_cooldown();
+	orb_tell(p);
 
 	sound(p, CHAN_AUTO, orb_own_sounds ? ORB_SND_LAUNCH : ORB_SND_LAUNCH_STOCK, 1, ATTN_NORM);
 	sound(orb, CHAN_VOICE, orb_own_sounds ? ORB_SND_HUM : ORB_SND_HUM_STOCK, 0.5, ATTN_IDLE);
@@ -589,8 +622,21 @@ static qbool orb_through_teleporter(gedict_t *p, gedict_t *tele)
 	return false;
 }
 
+// The orb's teleport sound where p stands, from a body double that stays there (teleport_player's reason: a sound
+// the player plays follows them to where they land).
+static void orb_teleport_sound_left(gedict_t *p)
+{
+	gedict_t *stand_in = spawn();
+
+	setorigin(stand_in, PASSVEC3(p->s.v.origin));
+	stand_in->s.v.nextthink = g_globalvars.time + 0.1;
+	stand_in->think = (func_t) SUB_Remove;
+	sound(stand_in, CHAN_AUTO, ORB_SND_TELEPORT, 1, ATTN_NORM);
+}
+
 static void orb_teleport(gedict_t *p, gedict_t *orb)
 {
+	int flags = TFLAGS_FOG_SRC | TFLAGS_FOG_DST;
 	vec3_t spot;
 
 	if (orb->orb_anchor && streq(orb->orb_anchor->classname, "trigger_teleport")
@@ -602,7 +648,19 @@ static void orb_teleport(gedict_t *p, gedict_t *orb)
 	}
 
 	orb_find_spot(p, orb, spot);
-	teleport_player(p, spot, p->s.v.v_angle, TFLAGS_FOG_SRC | TFLAGS_FOG_DST | TFLAGS_SND_SRC | TFLAGS_SND_DST);
+	if (orb_own_sounds)
+	{
+		orb_teleport_sound_left(p);
+	}
+	else
+	{
+		flags |= TFLAGS_SND_SRC | TFLAGS_SND_DST;
+	}
+	teleport_player(p, spot, p->s.v.v_angle, flags);
+	if (orb_own_sounds)
+	{
+		sound(p, CHAN_AUTO, ORB_SND_TELEPORT, 1, ATTN_NORM);
+	}
 	// Keep the player's own aim: fixangle would snap them back to where the
 	// server last saw them look, a ping ago.
 	p->s.v.fixangle = 0;
@@ -657,5 +715,11 @@ void Orb_MatchStart(void)
 	{
 		e->orb = NULL;
 		e->orb_ready_time = 0;
+		orb_tell(e);
 	}
+}
+
+void Orb_Spawned(gedict_t *p)
+{
+	orb_tell(p);
 }

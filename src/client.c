@@ -2974,6 +2974,8 @@ void PutClientInServer(void)
 	// the auto-start countdown.
 	mm_notify_connect();
 	mm_maybe_auto_start();
+
+	Orb_Spawned(self);	// QWLeague's HUD: the orb's state, as the player comes in
 }
 
 /*
